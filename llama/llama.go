@@ -30,10 +30,12 @@ package llama
 #cgo rocm CFLAGS: -DGGML_USE_CUDA -DGGML_USE_HIPBLAS -DGGML_CUDA_DMMV_X=32 -DGGML_CUDA_PEER_MAX_BATCH_SIZE=128 -DGGML_CUDA_MMV_Y=1 -DGGML_BUILD=1
 #cgo rocm CXXFLAGS: -DGGML_USE_CUDA -DGGML_USE_HIPBLAS -DGGML_CUDA_DMMV_X=32 -DGGML_CUDA_PEER_MAX_BATCH_SIZE=128 -DGGML_CUDA_MMV_Y=1 -DGGML_BUILD=1
 #cgo rocm LDFLAGS: -L${SRCDIR} -lggml_hipblas -lhipblas -lamdhip64 -lrocblas
-#cgo windows,cuda LDFLAGS: -lggml_cuda -lcuda -lcudart -lcublas -lcublasLt
+#cgo cuda11 LDFLAGS: -lggml_cuda_v11 -L/usr/local/cuda-11/lib64
+#cgo cuda12 LDFLAGS: -lggml_cuda_v12 -L/usr/local/cuda-12/lib64
+#cgo windows,cuda LDFLAGS: -lcuda -lcudart -lcublas -lcublasLt
 #cgo windows,rocm LDFLAGS: -lggml_hipblas -lhipblas -lamdhip64 -lrocblas
-#cgo linux,cuda LDFLAGS: -L/usr/local/cuda/lib64 -lggml_cuda -lcuda -lcudart -lcublas -lcublasLt -lpthread -ldl -lrt
-#cgo linux,rocm LDFLAGS: -L/opt/rocm/lib
+#cgo linux,cuda LDFLAGS: -lcuda -lcudart -lcublas -lcublasLt -lpthread -ldl -lrt -lresolv
+#cgo linux,rocm LDFLAGS: -L/opt/rocm/lib -lpthread -ldl -lrt -lresolv
 
 #include <stdlib.h>
 #include "llama.h"
@@ -54,6 +56,8 @@ import (
 	"strings"
 	"unsafe"
 )
+
+var CpuFeatures = ""
 
 func BackendInit() {
 	C.llama_backend_init()
@@ -164,6 +168,7 @@ type ModelParams struct {
 	UseMlock     bool
 	TensorSplit  []float32
 	Progress     func(float32)
+	VocabOnly    bool
 }
 
 //export llamaProgressCallback
@@ -180,6 +185,7 @@ func LoadModelFromFile(modelPath string, params ModelParams) *Model {
 	cparams.main_gpu = C.int32_t(params.MainGpu)
 	cparams.use_mmap = C.bool(params.UseMmap)
 	cparams.use_mlock = C.bool(params.UseMlock)
+	cparams.vocab_only = C.bool(params.VocabOnly)
 
 	if len(params.TensorSplit) > 0 {
 		tensorSplitData := &params.TensorSplit[0]
@@ -204,6 +210,10 @@ func LoadModelFromFile(modelPath string, params ModelParams) *Model {
 	}
 
 	return &Model{c: C.llama_load_model_from_file(C.CString(modelPath), cparams)}
+}
+
+func FreeModel(model *Model) {
+	C.llama_free_model(model.c)
 }
 
 func NewContextWithModel(model *Model, params ContextParams) *Context {
