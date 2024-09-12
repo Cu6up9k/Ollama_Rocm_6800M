@@ -226,8 +226,8 @@ func NewLlamaServer(gpus gpu.GpuInfoList, model string, ggml *GGML, adapters, pr
 	flashAttnEnabled := envconfig.FlashAttention()
 
 	for _, g := range gpus {
-		// only cuda (compute capability 7+) and metal support flash attention
-		if g.Library != "metal" && (g.Library != "cuda" || g.DriverMajor < 7) {
+		// only cuda (compute capability 7+), metal and musa support flash attention
+		if g.Library != "metal" && g.Library != "musa" && (g.Library != "cuda" || g.DriverMajor < 7) {
 			flashAttnEnabled = false
 		}
 
@@ -398,6 +398,7 @@ func NewLlamaServer(gpus gpu.GpuInfoList, model string, ggml *GGML, adapters, pr
 					strings.HasPrefix(ev, "HIP_") ||
 					strings.HasPrefix(ev, "GPU_") ||
 					strings.HasPrefix(ev, "HSA_") ||
+					strings.HasPrefix(ev, "MUSA_") ||
 					strings.HasPrefix(ev, "GGML_") ||
 					strings.HasPrefix(ev, "PATH=") ||
 					strings.HasPrefix(ev, "LD_LIBRARY_PATH=") {

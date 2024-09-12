@@ -5,6 +5,7 @@ ARG CUDA_V11_ARCHITECTURES="50;52;53;60;61;62;70;72;75;80;86"
 ARG CUDA_VERSION_12=12.4.0
 ARG CUDA_V12_ARCHITECTURES="60;61;62;70;72;75;80;86;87;89;90;90a"
 ARG ROCM_VERSION=6.1.2
+ARG MUSA_VERSION=1.5.1
 
 # Copy the minimal context we need to run the generate scripts
 FROM scratch AS llm-code
@@ -82,6 +83,19 @@ RUN --mount=type=cache,target=/root/.ccache \
     bash gen_linux.sh
 
 
+FROM --platform=linux/amd64 mthreads/musa:$MUSA_VERSION-mp_22-devel-ubuntu20.04 AS musa-build-amd64
+ARG CMAKE_VERSION
+COPY ./scripts/ubuntu_linux_deps.sh /
+RUN CMAKE_VERSION=${CMAKE_VERSION} sh /ubuntu_linux_deps.sh
+COPY --from=llm-code / /go/src/github.com/ollama/ollama/
+WORKDIR /go/src/github.com/ollama/ollama/llm/generate
+ARG CGO_CFLAGS
+ENV GOARCH amd64
+RUN --mount=type=cache,target=/root/.ccache \
+    OLLAMA_SKIP_STATIC_GENERATE=1 \
+    OLLAMA_SKIP_CPU_GENERATE=1 \
+    bash gen_linux.sh
+
 FROM --platform=linux/amd64 rocm/dev-centos-7:${ROCM_VERSION}-complete AS rocm-build-amd64
 ARG CMAKE_VERSION
 COPY ./scripts/rh_linux_deps.sh /
@@ -155,6 +169,8 @@ COPY --from=cuda-11-build-amd64 /go/src/github.com/ollama/ollama/dist/ dist/
 COPY --from=cuda-11-build-amd64 /go/src/github.com/ollama/ollama/llm/build/linux/ llm/build/linux/
 COPY --from=cuda-12-build-amd64 /go/src/github.com/ollama/ollama/dist/ dist/
 COPY --from=cuda-12-build-amd64 /go/src/github.com/ollama/ollama/llm/build/linux/ llm/build/linux/
+COPY --from=musa-build-amd64 /go/src/github.com/ollama/ollama/dist/ dist/
+COPY --from=musa-build-amd64 /go/src/github.com/ollama/ollama/llm/build/linux/ llm/build/linux/
 COPY --from=rocm-build-amd64 /go/src/github.com/ollama/ollama/dist/ dist/
 COPY --from=rocm-build-amd64 /go/src/github.com/ollama/ollama/llm/build/linux/ llm/build/linux/
 ARG GOFLAGS
@@ -186,7 +202,7 @@ RUN cd /scratch/ollama/ && rm -rf rocblas libamd* libdrm* libroc* libhip* libhsa
 # Runtime stages
 FROM --platform=linux/amd64 ubuntu:22.04 AS runtime-amd64
 COPY --from=amd64-libs-without-rocm /scratch/ /lib/
-RUN apt-get update && apt-get install -y ca-certificates && \
+RUN apt-get update && apt-get install -y ca-certificates libelf1 libnuma1 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY --from=build-amd64 /go/src/github.com/ollama/ollama/dist/linux-amd64/bin/ /bin/
 
@@ -214,6 +230,8 @@ ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV NVIDIA_VISIBLE_DEVICES=all
+ENV MTHREADS_DRIVER_CAPABILITIES=compute,utility
+ENV MTHREADS_VISIBLE_DEVICES=all
 
 ENTRYPOINT ["/bin/ollama"]
 CMD ["serve"]
