@@ -304,6 +304,7 @@ See the [API documentation](./docs/api.md) for all endpoints.
 - [LLMStack](https://github.com/trypromptly/LLMStack) (No-code multi-agent framework to build LLM agents and workflows)
 - [BoltAI for Mac](https://boltai.com) (AI Chat Client for Mac)
 - [Harbor](https://github.com/av/harbor) (Containerized LLM Toolkit with Ollama as default backend)
+- [LLMChat](https://github.com/trendy-design/llmchat) (Explore the capabilites of multiple LLMs including Ollama)
 - [Go-CREW](https://www.jonathanhecl.com/go-crew/) (Powerful Offline RAG in Golang)
 - [PartCAD](https://github.com/openvmp/partcad/) (CAD model generation with OpenSCAD and CadQuery)
 - [Ollama4j Web UI](https://github.com/ollama4j/ollama4j-web-ui) - Java-based Web UI for Ollama built with Vaadin, Spring Boot and Ollama4j
@@ -435,4 +436,3 @@ See the [API documentation](./docs/api.md) for all endpoints.
 ### Supported backends
 
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) project founded by Georgi Gerganov.
-
