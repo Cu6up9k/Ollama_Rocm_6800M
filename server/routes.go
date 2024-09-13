@@ -37,6 +37,9 @@ import (
 	"github.com/ollama/ollama/types/errtypes"
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
+	"github.com/ollama/ollama/telemetry"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
 )
 
 var mode string = gin.DebugMode
@@ -1103,10 +1106,19 @@ func (s *Server) GenerateRoutes() http.Handler {
 	}
 	config.AllowOrigins = envconfig.Origins()
 
+	meterProvider, err := telemetry.NewPrometheusMeterProvider()
+    if err != nil {
+        // Handle error
+    }
+	otel.SetMeterProvider(meterProvider)
+	// Use the metrics
+    m := telemetry.NewMetrics()
+
 	r := gin.Default()
 	r.Use(
 		cors.New(config),
 		allowedHostsMiddleware(s.addr),
+		prometheusMetricsMiddleware(m),
 	)
 
 	r.POST("/api/pull", s.PullHandler)
@@ -1122,6 +1134,8 @@ func (s *Server) GenerateRoutes() http.Handler {
 	r.POST("/api/blobs/:digest", s.CreateBlobHandler)
 	r.HEAD("/api/blobs/:digest", s.HeadBlobHandler)
 	r.GET("/api/ps", s.PsHandler)
+
+	r.GET("/metrics", s.MetricsHandler)
 
 	// Compatibility endpoints
 	r.POST("/v1/chat/completions", openai.ChatMiddleware(), s.ChatHandler)
@@ -1501,4 +1515,47 @@ func handleScheduleError(c *gin.Context, name string, err error) {
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
+}
+
+// prometheusMetricsMiddleware returns a Gin middleware handler that collects OpenTelemetry metrics for HTTP requests.
+// It records the route, response status code, and response status text for each request.
+func prometheusMetricsMiddleware(m *telemetry.Metrics) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        route := c.Request.URL.Path
+        c.Next()
+
+        // access the status we are sending
+        responseStatus := c.Writer.Status()
+        statusText := http.StatusText(responseStatus)
+
+        // record the request metric
+        m.RecordRequest(c.Request.Context(), "all", int64(responseStatus), statusText)
+
+        // record the metric based on request path
+        switch route {
+        case "/api/pull":
+            m.RecordModel(c.Request.Context(), "pull", int64(responseStatus), statusText)
+        case "/api/create":
+            m.RecordModel(c.Request.Context(), "create", int64(responseStatus), statusText)
+        case "/api/tags":
+            m.RecordModel(c.Request.Context(), "list", int64(responseStatus), statusText)
+        case "/api/push":
+            m.RecordModel(c.Request.Context(), "push", int64(responseStatus), statusText)
+        case "/api/copy":
+            m.RecordModel(c.Request.Context(), "copy", int64(responseStatus), statusText)
+        case "/api/delete":
+            m.RecordModel(c.Request.Context(), "delete", int64(responseStatus), statusText)
+        case "/api/show":
+            m.RecordModel(c.Request.Context(), "show", int64(responseStatus), statusText)
+        case "/api/chat":
+            m.RecordChat(c.Request.Context(), "chat", int64(responseStatus), statusText)
+        case "/v1/chat/completions":
+            m.RecordChat(c.Request.Context(), "chat", int64(responseStatus), statusText)
+        }
+    }
+}
+
+// MetricsHandler returns the gin.HandlerFunc that provides the Prometheus metrics format on GET requests
+func (s *Server) MetricsHandler(c *gin.Context) {
+	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 }
