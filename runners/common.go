@@ -119,7 +119,7 @@ func hasPayloads(payloadFS fs.FS) bool {
 
 func extractRunners(payloadFS fs.FS) (string, error) {
 	cleanupTmpDirs()
-	tmpDir, err := os.MkdirTemp(envconfig.TmpDir(), "ollama")
+	tmpDir, err := os.MkdirTemp(envconfig.TempDir(), "ollama")
 	if err != nil {
 		return "", fmt.Errorf("failed to generate tmp dir: %w", err)
 	}
@@ -224,7 +224,7 @@ func extractFiles(payloadFS fs.FS, targetDir string, glob string) error {
 
 // Best effort to clean up prior tmpdirs
 func cleanupTmpDirs() {
-	tmpDir := envconfig.TmpDir()
+	tmpDir := envconfig.TempDir()
 	if tmpDir == "" {
 		tmpDir = os.TempDir()
 	}

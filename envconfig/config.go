@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,45 +93,36 @@ func Models() string {
 	return filepath.Join(home, ".ollama", "models")
 }
 
-// KeepAlive returns the duration that models stay loaded in memory. KeepAlive can be configured via the OLLAMA_KEEP_ALIVE environment variable.
-// Negative values are treated as infinite. Zero is treated as no keep alive.
-// Default is 5 minutes.
-func KeepAlive() (keepAlive time.Duration) {
-	keepAlive = 5 * time.Minute
-	if s := Var("OLLAMA_KEEP_ALIVE"); s != "" {
-		if d, err := time.ParseDuration(s); err == nil {
-			keepAlive = d
-		} else if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-			keepAlive = time.Duration(n) * time.Second
+func Duration(k string, defaultValue time.Duration, zeroIsInfinite bool) func() time.Duration {
+	return func() time.Duration {
+		dur := defaultValue
+		if s := Var(k); s != "" {
+			if d, err := time.ParseDuration(s); err == nil {
+				dur = d
+			} else if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				dur = time.Duration(n) * time.Second
+			}
 		}
-	}
 
-	if keepAlive < 0 {
-		return time.Duration(math.MaxInt64)
-	}
+		if dur < 0 || (dur == 0 && zeroIsInfinite) {
+			return time.Duration(math.MaxInt64)
+		}
 
-	return keepAlive
+		return dur
+	}
 }
 
-// LoadTimeout returns the duration for stall detection during model loads. LoadTimeout can be configured via the OLLAMA_LOAD_TIMEOUT environment variable.
-// Zero or Negative values are treated as infinite.
-// Default is 5 minutes.
-func LoadTimeout() (loadTimeout time.Duration) {
-	loadTimeout = 5 * time.Minute
-	if s := Var("OLLAMA_LOAD_TIMEOUT"); s != "" {
-		if d, err := time.ParseDuration(s); err == nil {
-			loadTimeout = d
-		} else if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-			loadTimeout = time.Duration(n) * time.Second
-		}
-	}
+var (
+	// KeepAlive returns the duration that models stay loaded in memory. KeepAlive can be configured via the OLLAMA_KEEP_ALIVE environment variable.
+	// Negative values are treated as infinite keep alive. Zero is treated as no keep alive.
+	// Default is 5 minutes.
+	KeepAlive = Duration("OLLAMA_KEEP_ALIVE", 5*time.Minute, false)
 
-	if loadTimeout <= 0 {
-		return time.Duration(math.MaxInt64)
-	}
-
-	return loadTimeout
-}
+	// LoadTimeout returns the duration for stall detection during model loads. LoadTimeout can be configured via the OLLAMA_LOAD_TIMEOUT environment variable.
+	// Negative or zero values are treated as infinite timeout.
+	// Default is 5 minutes.
+	LoadTimeout = Duration("OLLAMA_LOAD_TIMEOUT", 5*time.Minute, true)
+)
 
 func Bool(k string) func() bool {
 	return func() bool {
@@ -170,7 +162,7 @@ func String(s string) func() string {
 
 var (
 	LLMLibrary = String("OLLAMA_LLM_LIBRARY")
-	TmpDir     = String("OLLAMA_TMPDIR")
+	TempDir    = String("OLLAMA_TMPDIR")
 
 	CudaVisibleDevices    = String("CUDA_VISIBLE_DEVICES")
 	HipVisibleDevices     = String("HIP_VISIBLE_DEVICES")
@@ -179,13 +171,14 @@ var (
 	HsaOverrideGfxVersion = String("HSA_OVERRIDE_GFX_VERSION")
 )
 
-func Uint(key string, defaultValue uint) func() uint {
-	return func() uint {
+
+func Uint[T uint | uint16 | uint32 | uint64](key string, defaultValue T) func() T {
+	return func() T {
 		if s := Var(key); s != "" {
 			if n, err := strconv.ParseUint(s, 10, 64); err != nil {
 				slog.Warn("invalid environment variable, using default", "key", key, "value", s, "default", defaultValue)
 			} else {
-				return uint(n)
+				return T(n)
 			}
 		}
 
@@ -195,88 +188,91 @@ func Uint(key string, defaultValue uint) func() uint {
 
 var (
 	// NumParallel sets the number of parallel model requests. NumParallel can be configured via the OLLAMA_NUM_PARALLEL environment variable.
-	NumParallel = Uint("OLLAMA_NUM_PARALLEL", 0)
+	NumParallel = Uint("OLLAMA_NUM_PARALLEL", uint(0))
 	// MaxRunners sets the maximum number of loaded models. MaxRunners can be configured via the OLLAMA_MAX_LOADED_MODELS environment variable.
-	MaxRunners = Uint("OLLAMA_MAX_LOADED_MODELS", 0)
+	MaxRunners = Uint("OLLAMA_MAX_LOADED_MODELS", uint(0))
 	// MaxQueue sets the maximum number of queued requests. MaxQueue can be configured via the OLLAMA_MAX_QUEUE environment variable.
-	MaxQueue = Uint("OLLAMA_MAX_QUEUE", 512)
+	MaxQueue = Uint("OLLAMA_MAX_QUEUE", uint(512))
 	// MaxVRAM sets a maximum VRAM override in bytes. MaxVRAM can be configured via the OLLAMA_MAX_VRAM environment variable.
-	MaxVRAM = Uint("OLLAMA_MAX_VRAM", 0)
+	MaxVRAM = Uint("OLLAMA_MAX_VRAM", uint(0))
+	// GPUOverhead reserves a portion of VRAM per GPU. GPUOverhead can be configured via the OLLAMA_GPU_OVERHEAD environment variable.
+	GPUOverhead = Uint("OLLAMA_GPU_OVERHEAD", uint64(0))
 )
 
-func Uint64(key string, defaultValue uint64) func() uint64 {
-	return func() uint64 {
-		if s := Var(key); s != "" {
-			if n, err := strconv.ParseUint(s, 10, 64); err != nil {
-				slog.Warn("invalid environment variable, using default", "key", key, "value", s, "default", defaultValue)
-			} else {
-				return n
-			}
-		}
-
-		return defaultValue
-	}
+type desc struct {
+	name         string
+	usage        string
+	value        any
+	defaultValue any
 }
 
-// Set aside VRAM per GPU
-var GpuOverhead = Uint64("OLLAMA_GPU_OVERHEAD", 0)
-
-type EnvVar struct {
-	Name        string
-	Value       any
-	Description string
+func (e desc) String() string {
+	return fmt.Sprintf("%s:%v", e.name, e.value)
 }
 
-func AsMap() map[string]EnvVar {
-	ret := map[string]EnvVar{
-		"OLLAMA_DEBUG":             {"OLLAMA_DEBUG", Debug(), "Show additional debug information (e.g. OLLAMA_DEBUG=1)"},
-		"OLLAMA_FLASH_ATTENTION":   {"OLLAMA_FLASH_ATTENTION", FlashAttention(), "Enabled flash attention"},
-		"OLLAMA_GPU_OVERHEAD":      {"OLLAMA_GPU_OVERHEAD", GpuOverhead(), "Reserve a portion of VRAM per GPU (bytes)"},
-		"OLLAMA_HOST":              {"OLLAMA_HOST", Host(), "IP Address for the ollama server (default 127.0.0.1:11434)"},
-		"OLLAMA_KEEP_ALIVE":        {"OLLAMA_KEEP_ALIVE", KeepAlive(), "The duration that models stay loaded in memory (default \"5m\")"},
-		"OLLAMA_LLM_LIBRARY":       {"OLLAMA_LLM_LIBRARY", LLMLibrary(), "Set LLM library to bypass autodetection"},
-		"OLLAMA_LOAD_TIMEOUT":      {"OLLAMA_LOAD_TIMEOUT", LoadTimeout(), "How long to allow model loads to stall before giving up (default \"5m\")"},
-		"OLLAMA_MAX_LOADED_MODELS": {"OLLAMA_MAX_LOADED_MODELS", MaxRunners(), "Maximum number of loaded models per GPU"},
-		"OLLAMA_MAX_QUEUE":         {"OLLAMA_MAX_QUEUE", MaxQueue(), "Maximum number of queued requests"},
-		"OLLAMA_MODELS":            {"OLLAMA_MODELS", Models(), "The path to the models directory"},
-		"OLLAMA_NOHISTORY":         {"OLLAMA_NOHISTORY", NoHistory(), "Do not preserve readline history"},
-		"OLLAMA_NOPRUNE":           {"OLLAMA_NOPRUNE", NoPrune(), "Do not prune model blobs on startup"},
-		"OLLAMA_NUM_PARALLEL":      {"OLLAMA_NUM_PARALLEL", NumParallel(), "Maximum number of parallel requests"},
-		"OLLAMA_ORIGINS":           {"OLLAMA_ORIGINS", Origins(), "A comma separated list of allowed origins"},
-		"OLLAMA_SCHED_SPREAD":      {"OLLAMA_SCHED_SPREAD", SchedSpread(), "Always schedule model across all GPUs"},
-		"OLLAMA_TMPDIR":            {"OLLAMA_TMPDIR", TmpDir(), "Location for temporary files"},
+func Vars() []desc {
+	s := []desc{
+		{"OLLAMA_DEBUG", "Enable debug", Debug(), false},
+		{"OLLAMA_FLASH_ATTENTION", "Enabled flash attention", FlashAttention(), false},
+		{"OLLAMA_GPU_OVERHEAD", "Reserve a portion of VRAM per GPU", GPUOverhead(), 0},
+		{"OLLAMA_HOST", "Listen address and port", Host(), "127.0.0.1:11434"},
+		{"OLLAMA_KEEP_ALIVE", "Duration of inactivity before models are unloaded", KeepAlive(), 5 * time.Minute},
+		{"OLLAMA_LLM_LIBRARY", "Set LLM library to bypass autodetection", LLMLibrary(), nil},
+		{"OLLAMA_LOAD_TIMEOUT", "Duration for stall detection during model loads", LoadTimeout(), 5 * time.Minute},
+		{"OLLAMA_MAX_LOADED_MODELS", "Maximum number of loaded models per GPU", MaxRunners(), nil},
+		{"OLLAMA_MAX_QUEUE", "Maximum number of queued requests", MaxQueue(), nil},
+		{"OLLAMA_MAX_VRAM", "Maximum VRAM to consider for model offloading", MaxVRAM(), nil},
+		{"OLLAMA_MODELS", "Path override for models directory", Models(), nil},
+		{"OLLAMA_NOHISTORY", "Disable readline history", NoHistory(), false},
+		{"OLLAMA_NOPRUNE", "Disable unused blob pruning", NoPrune(), false},
+		{"OLLAMA_NUM_PARALLEL", "Maximum number of parallel requests before requests are queued", NumParallel(), nil},
+		{"OLLAMA_ORIGINS", "Additional HTTP Origins to allow", Origins(), nil},
+		{"OLLAMA_SCHED_SPREAD", "Always schedule model across all GPUs", SchedSpread(), false},
+		{"OLLAMA_TMPDIR", "Path override for temporary directory", TempDir(), nil},
 
-		// Informational
-		"HTTP_PROXY":  {"HTTP_PROXY", String("HTTP_PROXY")(), "HTTP proxy"},
-		"HTTPS_PROXY": {"HTTPS_PROXY", String("HTTPS_PROXY")(), "HTTPS proxy"},
-		"NO_PROXY":    {"NO_PROXY", String("NO_PROXY")(), "No proxy"},
+		// informational
+		{"HTTPS_PROXY", "Proxy for HTTPS requests", os.Getenv("HTTPS_PROXY"), nil},
+		{"HTTP_PROXY", "Proxy for HTTP requests", os.Getenv("HTTP_PROXY"), nil},
+		{"NO_PROXY", "No proxy for these hosts", os.Getenv("NO_PROXY"), nil},
 	}
 
 	if runtime.GOOS != "windows" {
-		// Windows environment variables are case-insensitive so there's no need to duplicate them
-		ret["http_proxy"] = EnvVar{"http_proxy", String("http_proxy")(), "HTTP proxy"}
-		ret["https_proxy"] = EnvVar{"https_proxy", String("https_proxy")(), "HTTPS proxy"}
-		ret["no_proxy"] = EnvVar{"no_proxy", String("no_proxy")(), "No proxy"}
+		s = append(
+			s,
+			desc{"https_proxy", "Proxy for HTTPS requests", os.Getenv("https_proxy"), nil},
+			desc{"http_proxy", "Proxy for HTTP requests", os.Getenv("http_proxy"), nil},
+			desc{"no_proxy", "No proxy for these hosts", os.Getenv("no_proxy"), nil},
+		)
 	}
 
 	if runtime.GOOS != "darwin" {
-		ret["CUDA_VISIBLE_DEVICES"] = EnvVar{"CUDA_VISIBLE_DEVICES", CudaVisibleDevices(), "Set which NVIDIA devices are visible"}
-		ret["HIP_VISIBLE_DEVICES"] = EnvVar{"HIP_VISIBLE_DEVICES", HipVisibleDevices(), "Set which AMD devices are visible"}
-		ret["ROCR_VISIBLE_DEVICES"] = EnvVar{"ROCR_VISIBLE_DEVICES", RocrVisibleDevices(), "Set which AMD devices are visible"}
-		ret["GPU_DEVICE_ORDINAL"] = EnvVar{"GPU_DEVICE_ORDINAL", GpuDeviceOrdinal(), "Set which AMD devices are visible"}
-		ret["HSA_OVERRIDE_GFX_VERSION"] = EnvVar{"HSA_OVERRIDE_GFX_VERSION", HsaOverrideGfxVersion(), "Override the gfx used for all detected AMD GPUs"}
-		ret["OLLAMA_INTEL_GPU"] = EnvVar{"OLLAMA_INTEL_GPU", IntelGPU(), "Enable experimental Intel GPU detection"}
+		s = append(
+			s,
+			desc{"CUDA_VISIBLE_DEVICES", "Set which NVIDIA devices are visible", CudaVisibleDevices(), nil},
+			desc{"HIP_VISIBLE_DEVICES", "Set which AMD devices are visible", HipVisibleDevices(), nil},
+			desc{"ROCR_VISIBLE_DEVICES", "Set which AMD devices are visible", RocrVisibleDevices(), nil},
+			desc{"GPU_DEVICE_ORDINAL", "Set which AMD devices are visible", GpuDeviceOrdinal(), nil},
+			desc{"HSA_OVERRIDE_GFX_VERSION", "Override the gfx used for all detected AMD GPUs", HsaOverrideGfxVersion(), nil},
+			desc{"OLLAMA_INTEL_GPU", "Enable experimental Intel GPU detection", IntelGPU(), nil},
+		)
 	}
 
-	return ret
+	return s
 }
 
-func Values() map[string]string {
-	vals := make(map[string]string)
-	for k, v := range AsMap() {
-		vals[k] = fmt.Sprintf("%v", v.Value)
+func Describe(s ...string) map[string]string {
+	vars := Vars()
+	m := make(map[string]string, len(s))
+	for _, k := range s {
+		if i := slices.IndexFunc(vars, func(e desc) bool { return e.name == k }); i != -1 {
+			m[k] = vars[i].usage
+			if vars[i].defaultValue != nil {
+				m[k] = fmt.Sprintf("%s (default: %v)", vars[i].usage, vars[i].defaultValue)
+			}
+		}
 	}
-	return vals
+
+	return m
 }
 
 // Var returns an environment variable stripped of leading and trailing quotes or spaces

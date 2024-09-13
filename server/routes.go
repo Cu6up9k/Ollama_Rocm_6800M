@@ -1150,7 +1150,7 @@ func Serve(ln net.Listener) error {
 		level = slog.LevelDebug
 	}
 
-	slog.Info("server config", "env", envconfig.Values())
+	slog.Info("server config", "env", envconfig.Vars())
 	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level:     level,
 		AddSource: true,

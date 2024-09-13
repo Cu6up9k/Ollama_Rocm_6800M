@@ -175,7 +175,7 @@ func TestUint(t *testing.T) {
 	for k, v := range cases {
 		t.Run(k, func(t *testing.T) {
 			t.Setenv("OLLAMA_UINT", k)
-			if i := Uint("OLLAMA_UINT", 11434)(); i != v {
+			if i := Uint("OLLAMA_UINT", uint(11434))(); i != v {
 				t.Errorf("%s: expected %d, got %d", k, v, i)
 			}
 		})

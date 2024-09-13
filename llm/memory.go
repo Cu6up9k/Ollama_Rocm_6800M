@@ -95,7 +95,7 @@ func EstimateGPULayers(gpus []gpu.GpuInfo, ggml *GGML, projectors []string, opts
 	// Overflow that didn't fit into the GPU
 	var overflow uint64
 
-	overhead := envconfig.GpuOverhead()
+	overhead := envconfig.GPUOverhead()
 	availableList := make([]string, len(gpus))
 	for i, gpu := range gpus {
 		availableList[i] = format.HumanBytes2(gpu.FreeMemory)
@@ -322,7 +322,7 @@ func EstimateGPULayers(gpus []gpu.GpuInfo, ggml *GGML, projectors []string, opts
 }
 
 func (m MemoryEstimate) log() {
-	overhead := envconfig.GpuOverhead()
+	overhead := envconfig.GPUOverhead()
 	slog.Info(
 		"offload to "+m.inferenceLibrary,
 		slog.Group(
