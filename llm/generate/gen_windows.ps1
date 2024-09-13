@@ -13,6 +13,7 @@ function amdGPUs {
         "gfx1100"
         "gfx1101"
         "gfx1102"
+        "gfx1031"
     )
     $GPU_LIST -join ';'
 }
