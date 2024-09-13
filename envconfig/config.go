@@ -160,8 +160,6 @@ var (
 	SchedSpread = Bool("OLLAMA_SCHED_SPREAD")
 	// IntelGPU enables experimental Intel GPU detection.
 	IntelGPU = Bool("OLLAMA_INTEL_GPU")
-	// Set via OLLAMA_NEW_RUNNERS in the environment
-	NewRunners = Bool("OLLAMA_NEW_RUNNERS")
 )
 
 func String(s string) func() string {
@@ -180,53 +178,6 @@ var (
 	GpuDeviceOrdinal      = String("GPU_DEVICE_ORDINAL")
 	HsaOverrideGfxVersion = String("HSA_OVERRIDE_GFX_VERSION")
 )
-
-func RunnersDir() (p string) {
-	if p := Var("OLLAMA_RUNNERS_DIR"); p != "" {
-		return p
-	}
-
-	if runtime.GOOS != "windows" {
-		return
-	}
-
-	defer func() {
-		if p == "" {
-			slog.Error("unable to locate llm runner directory. Set OLLAMA_RUNNERS_DIR to the location of 'ollama/runners'")
-		}
-	}()
-
-	// On Windows we do not carry the payloads inside the main executable
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return
-	}
-
-	var paths []string
-	for _, root := range []string{filepath.Dir(exe), filepath.Join(filepath.Dir(exe), LibRelativeToExe()), cwd} {
-		paths = append(paths,
-			root,
-			filepath.Join(root, runtime.GOOS+"-"+runtime.GOARCH),
-			filepath.Join(root, "dist", runtime.GOOS+"-"+runtime.GOARCH),
-		)
-	}
-
-	// Try a few variations to improve developer experience when building from source in the local tree
-	for _, path := range paths {
-		candidate := filepath.Join(path, "lib", "ollama", "runners")
-		if _, err := os.Stat(candidate); err == nil {
-			p = candidate
-			break
-		}
-	}
-
-	return p
-}
 
 func Uint(key string, defaultValue uint) func() uint {
 	return func() uint {
@@ -291,9 +242,7 @@ func AsMap() map[string]EnvVar {
 		"OLLAMA_NOHISTORY":         {"OLLAMA_NOHISTORY", NoHistory(), "Do not preserve readline history"},
 		"OLLAMA_NOPRUNE":           {"OLLAMA_NOPRUNE", NoPrune(), "Do not prune model blobs on startup"},
 		"OLLAMA_NUM_PARALLEL":      {"OLLAMA_NUM_PARALLEL", NumParallel(), "Maximum number of parallel requests"},
-		"OLLAMA_NEW_RUNNERS":       {"OLLAMA_NEW_RUNNERS", NewRunners(), "Enable new experimental runners"},
 		"OLLAMA_ORIGINS":           {"OLLAMA_ORIGINS", Origins(), "A comma separated list of allowed origins"},
-		"OLLAMA_RUNNERS_DIR":       {"OLLAMA_RUNNERS_DIR", RunnersDir(), "Location for runners"},
 		"OLLAMA_SCHED_SPREAD":      {"OLLAMA_SCHED_SPREAD", SchedSpread(), "Always schedule model across all GPUs"},
 		"OLLAMA_TMPDIR":            {"OLLAMA_TMPDIR", TmpDir(), "Location for temporary files"},
 	}
