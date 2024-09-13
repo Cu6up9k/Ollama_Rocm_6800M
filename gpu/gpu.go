@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -167,6 +169,32 @@ func GetCPUInfo() GpuInfoList {
 	return GpuInfoList{cpus[0].GpuInfo}
 }
 
+func DetectInteliGpuMemStatus(gpuInfo *OneapiGPUInfo) {
+	var totalram uint64 = uint64(C.check_total_host_mem())
+	// there will be half of total ram can be handle as iGPU vram
+	gpuInfo.TotalMemory = totalram / 2
+	cmd := "find /sys/kernel/debug/dri/ -name i915_gem_objects | xargs awk '{n=NF-1; print $n; exit}' | sort -nr | head -1"
+	terminal := "bash"
+	if runtime.GOOS == "windows" {
+		cmd = `(((Get-Counter "\GPU Process Memory(*)\Local Usage").CounterSamples | where CookedValue).CookedValue | measure -sum).sum`
+		terminal = "powershell"
+	}
+	output, err := exec.Command(terminal, "-c", cmd).Output()
+	if err != nil {
+		slog.Warn(fmt.Sprintf("Error executing command for getting Intel iGPUs system RAM usage: %s", err))
+		return
+	}
+	result := strings.TrimSpace(string(output))
+	if result != "" {
+		usedRAM, _ := strconv.ParseUint(result, 10, 64)
+		gpuInfo.FreeMemory = gpuInfo.TotalMemory - usedRAM
+	} else {
+		gpuInfo.GpuInfo.UnreliableFreeMemory = true
+		slog.Warn("failed to get amount of system RAM allocated to Intel iGPU, so there exists OOM risk during inference.  As debugfs can be accessed only as root, please try to run ollama with sudo privilege. Turn UnreliableFreeMemory flag On")
+		gpuInfo.FreeMemory = gpuInfo.TotalMemory - 1024*1024*1024 // leave 1G system RAM for other (CPU and iGPU) tasks.
+	}
+}
+
 func GetGPUInfo() GpuInfoList {
 	// TODO - consider exploring lspci (and equivalent on windows) to check for
 	// GPUs so we can report warnings if we see Nvidia/AMD but fail to load the libraries
@@ -310,11 +338,6 @@ func GetGPUInfo() GpuInfoList {
 			oHandles = initOneAPIHandles()
 			if oHandles != nil && oHandles.oneapi != nil {
 				for d := range oHandles.oneapi.num_drivers {
-					if oHandles.oneapi == nil {
-						// shouldn't happen
-						slog.Warn("nil oneapi handle with driver count", "count", int(oHandles.oneapi.num_drivers))
-						continue
-					}
 					devCount := C.oneapi_get_device_count(*oHandles.oneapi, C.int(d))
 					for i := range devCount {
 						gpuInfo := OneapiGPUInfo{
@@ -333,8 +356,16 @@ func GetGPUInfo() GpuInfoList {
 						gpuInfo.FreeMemory = uint64(memInfo.free)
 						gpuInfo.ID = C.GoString(&memInfo.gpu_id[0])
 						gpuInfo.Name = C.GoString(&memInfo.gpu_name[0])
+						// now level-zero dosen't support iGPU mem status detection, 0 byte vram is a sign of iGPU
+						gpuInfo.isiGPU = gpuInfo.TotalMemory == 0
+						// enable Core Ultra Xe igpus.
+						if envconfig.ForceEnableIntelIGPU() || (IsIntelCoreUltraCpus() && gpuInfo.isiGPU) {
+							DetectInteliGpuMemStatus(&gpuInfo)
+						}
 						gpuInfo.DependencyPath = depPath
-						oneapiGPUs = append(oneapiGPUs, gpuInfo)
+						if gpuInfo.TotalMemory > 0 {
+							oneapiGPUs = append(oneapiGPUs, gpuInfo)
+						}
 					}
 				}
 			}
@@ -436,6 +467,9 @@ func GetGPUInfo() GpuInfoList {
 			var totalFreeMem float64 = float64(memInfo.free) * 0.95 // work-around: leave some reserve vram for mkl lib used in ggml-sycl backend.
 			memInfo.free = C.uint64_t(totalFreeMem)
 			oneapiGPUs[i].FreeMemory = uint64(memInfo.free)
+			if envconfig.ForceEnableIntelIGPU() || (IsIntelCoreUltraCpus() && gpu.isiGPU) {
+				DetectInteliGpuMemStatus(&oneapiGPUs[i])
+			}
 		}
 
 		err = RocmGPUInfoList(rocmGPUs).RefreshFreeMemory()
